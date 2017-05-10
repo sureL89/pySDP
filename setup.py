@@ -2,6 +2,7 @@
 
 from distutils.core import setup
 from pysdp import __version__ as version
+from setuptools import setup
 
 setup(name='pySDP',
       version=version,
@@ -22,5 +23,5 @@ setup(name='pySDP',
       ],
       keywords = ['climate', ],
 
-      tests_require = ['nose'],
+#      tests_require = ['nose'],
      )

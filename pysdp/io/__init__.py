@@ -16,6 +16,7 @@
 import iris
 import os
 import numpy as np
+import warnings
 
 
 class Dataset(object):
@@ -57,7 +58,6 @@ class Dataset(object):
             defaults to directory/tmp
         """
         from cartopy.crs import Geodetic
-        
         self.directory = directory
         self.filename = filename
         self.tmp_directory = tmp_directory or os.path.join(directory, 'tmp')
@@ -98,8 +98,16 @@ class Dataset(object):
         x = self.cube_list[0].coord(axis="X", dim_coords=True)
         y = self.cube_list[0].coord(axis="Y", dim_coords=True)
 
-        # save the coordinate system
-        self._coord_system = x.coord_system.as_cartopy_crs()
+        # Determine source coordinate system
+        if x.coord_system is None:
+            # Assume WGS84 latlon if unspecified
+            warnings.warn('Coordinate system of latitude and longitude '
+                          'coordinates is not specified. Assuming WGS84 Geodetic.')
+            self._coord_system = iris.coord_systems.GeogCS(semi_major_axis=6378137.0,
+            inverse_flattening=298.257223563).as_cartopy_crs()
+        else:
+            # save the coordinate system
+            self._coord_system = x.coord_system.as_cartopy_crs()
 
         remove_bounds = False
         if not x.has_bounds():
@@ -116,7 +124,8 @@ class Dataset(object):
 
         ll_crs = Geodetic()
         lon_lat_edges = ll_crs.transform_points(
-            x.coord_system.as_cartopy_crs(), x_edges, y_edges)[:, :-1]
+            # x.coord_system.as_cartopy_crs(), x_edges, y_edges)[:, :-1]
+            self._coord_system, x_edges, y_edges)[:, :-1]
         east, west = max(lon_lat_edges[:, 0]), min(lon_lat_edges[:, 0])
         north, south = max(lon_lat_edges[:, 1]), min(lon_lat_edges[:, 1])
 
