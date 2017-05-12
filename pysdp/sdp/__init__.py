@@ -1,10 +1,4 @@
-import numpy as np
 import iris
-import iris.coord_categorisation
-from scipy.signal import detrend
-
-iris.FUTURE.netcdf_promote = True
-
 
 class Downscaler(object):
     """
@@ -67,96 +61,61 @@ class Downscaler(object):
             all days/months of year (None), single day/month (int) or
             list of days/months (iterable)
         """
-        from .utils import generate_year_constraint_with_window
+        from .utils import calculate_anomaly_monthlymean
+        from scipy.signal import detrend
 
-        # Reanalysis cube list
-        for rea_cube in self.rea:
-            # Extract the reduced area
-            rea_cube = rea_cube.intersection(latitude=self.reference_spatial[0:2],
-                                             longitude=self.reference_spatial[2:])
+        # Iterate over list of cube lists
+        for cube_list in [self.rea, self.obs]:
+            for i,c in enumerate(cube_list):
+                # Extract the reduced area if cube is not a timeseries
+                if not c.attributes.get('featureType', '') == 'timeSeries':
+                    c = c.intersection(latitude=self.reference_spatial[0:2],
+                                       longitude=self.reference_spatial[2:])
+                # Extract data
+                c_data = c.data
+                # Calculate Anomalies and monthly Means
+                c_anom, c_monthMean = calculate_anomaly_monthlymean(c_data)
 
-            rea_data = rea_cube.data
-            # Calculate Anomalies and monthly Means
-            rea_anom, rea_monthMean = self._calc_anom(rea_data)
+                # Detrend the Anomalies
+                c_detrended = detrend(c_anom, type='constant', axis=0)
 
-            # Detrend the Anomalies
-            rea_detrended = detrend(rea_anom, type='constant', axis=0)
-
-            rea_cube.data = rea_detrended
-
-        # Observation cube list
-        for obs_cube in self.obs:
-            obs_data = obs_cube.data
-            # Calculate Anomalies and monthly Means
-            obs_anom, obs_monthMean = self._calc_anom(obs_data)
-
-            # Detrend the Anomalies
-            obs_detrended = detrend(obs_anom, type='constant', axis=0)
-
-            obs_cube.data = obs_detrended
-
-
-        # call the correction function
-        # self.call_func(obs_cube, *args, **kwargs)
-
-
-        # # Extract one Season
-        # obs_seas_ext = obs_seas.extract(iris.Constraint(clim_season='djf'))
-
-        # # Calculate seasonal EOFs
-        # eof_solver = Eof(obs_seas_ext, weights='coslat')
-        # obs_seas_ext_eof = eof_solver.eofs(neofs=5)
+                c.data = c_detrended
+                cube_list[i] = c
 
 
     def seasonal_mean(self, *args, **kwargs):
-        self.rea = self._calc_seasonal_mean(self.rea)
-        self.obs = self._calc_seasonal_mean(self.obs)
+        # Calculate the seasonal mean for all cubes in the cube list
+        import iris.coord_categorisation
+
+        for cube_list in [self.rea, self.obs]:
+            for i,c in enumerate(cube_list):
+                iris.coord_categorisation.add_season(c, 'time', name='clim_season')
+                iris.coord_categorisation.add_season_year(c, 'time', name='season_year')
+                cube_list[i] = c.aggregated_by(
+                    ['clim_season', 'season_year'],
+                    iris.analysis.MEAN)
+
+            # Filter anomalies with less than 3 Months
+            # spans_three_months = lambda t: (t.bound[1] - t.bound[0]) > 3*28*24.0
+            # three_months_bound = iris.Constraint(time=spans_three_months)
+            # self.rea[i] = c.extract(three_months_bound)
+
+        self.time_unit = "seasonal"
 
 
-    def calculate_eof(self):
-        return True
-        # # Calculate seasonal EOFs
+    def eof_analysis(self):
+        # Calculate EOFs
+        if self.time_unit == "seasonal":
+            pass
+
         # eof_solver = Eof(obs_seas_ext, weights='coslat')
         # obs_seas_ext_eof = eof_solver.eofs(neofs=5)
 
-
-    def _calc_seasonal_mean(self, cube_list, *args, **kwargs):
-        # Calculate the seasonal mean for all cubes in the cube list
-        for c in cube_list:
-            iris.coord_categorisation.add_season(c, 'time', name='clim_season')
-            iris.coord_categorisation.add_season_year(c, 'time', name='season_year')
-            c = c.aggregated_by(
-                ['clim_season', 'season_year'],
-                iris.analysis.MEAN)
-            print(c)
-
-            # Filter anomalies with less than 3 Months
-            spans_three_months = lambda t: (t.bound[1] - t.bound[0]) > 3*28*24.0
-            three_months_bound = iris.Constraint(time=spans_three_months)
-            c = c.extract(three_months_bound)
-
-        return cube_list
-
-
-    def _calc_anom(self,var_inp):
-        """ Calculates the anomalies and monthly mean for a numpy array"""
-        orig_dim = var_inp.shape
-        reshape_dim = [-1,12]
-        reshape_dim.extend(var_inp.shape[1:])
-
-        var_reshape = np.reshape(var_inp, reshape_dim, order='C')
-
-        var_monthMean = np.mean(var_reshape, axis=0)
-
-        var_anom = var_reshape - var_monthMean
-        var_anom = np.reshape(var_anom, orig_dim, order='C')
-
-        return var_anom, var_monthMean
 
 
 class GARDownscaler(Downscaler):
     """
-    convenience class for Matulla Downscaler
+    Convenience class for Greater Alpine Reagion downscaler
     """
 
     def __init__(self, observation, reanalysis, reference_spatial,

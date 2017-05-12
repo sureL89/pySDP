@@ -21,6 +21,51 @@ Utility functions needed for generating temporal constraints on
 
 from iris.time import PartialDateTime
 from iris import Constraint
+from eofs.iris import Eof
+import numpy as np
+
+def eof_pc_modes(cube, fraction_explained, show_info):
+    n_eofs = 0
+    n_fraction = 0
+    solver = Eof(cube, weights='coslat')
+    # Number of EOFs needed to explain the fraction (fraction_explained) of the total variance
+    while n_fraction < fraction_explained:
+        n_eofs = n_eofs+1
+        cube.eof_var = solver.varianceFraction(neigs=n_eofs)
+        n_fraction = np.sum(cube.eof_var.data)
+    cube.eof = solver.eofs(neofs=n_eofs)
+    cube.pcs = solver.pcs(npcs=n_eofs)
+    # Funtion return
+    if show_info == 'on':
+        for i in range(0,n_eofs):
+            print('EOF '+str(i+1)+' fraction: '+str("%.2f" % (cube.eof_var.data[i]*100))+'%')
+        print(str("%.2f" % (n_fraction*100))+'% of the total variance explained by '+str(n_eofs)+' EOF modes.')
+        return cube.eof, cube.pcs
+    elif show_info == 'off':
+        return cube.eof, cube.pcs
+    else:
+        print 'Missing show_info="on" or show_info="off"'
+
+def calculate_anomaly_monthlymean(var_inp):
+    """ Calculates the anomalies and monthly mean for a numpy array
+
+    Args:
+
+    * var_inp (numpy.array):
+        Input Array. First axis must be time and divisible by 12
+    """
+    orig_dim = var_inp.shape
+    reshape_dim = [-1,12]
+    reshape_dim.extend(var_inp.shape[1:])
+
+    var_reshape = np.reshape(var_inp, reshape_dim, order='C')
+
+    var_monthMean = np.mean(var_reshape, axis=0)
+
+    var_anom = var_reshape - var_monthMean
+    var_anom = np.reshape(var_anom, orig_dim, order='C')
+
+    return var_anom, var_monthMean
 
 def generate_year_constraint_with_window(year, window):
     """
