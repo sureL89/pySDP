@@ -24,7 +24,8 @@ from iris import Constraint
 from eofs.iris import Eof
 import numpy as np
 
-def eof_pc_modes(cube, fraction_explained, show_info):
+
+def eof_pc_modes(cube, fraction_explained, show_info=False):
     n_eofs = 0
     n_fraction = 0
     solver = Eof(cube, weights='coslat')
@@ -35,16 +36,18 @@ def eof_pc_modes(cube, fraction_explained, show_info):
         n_fraction = np.sum(cube.eof_var.data)
     cube.eof = solver.eofs(neofs=n_eofs)
     cube.pcs = solver.pcs(npcs=n_eofs)
-    # Funtion return
-    if show_info == 'on':
+    cube.solver = solver
+    cube.neofs = n_eofs
+    # Function return
+    if show_info:
         for i in range(0,n_eofs):
             print('EOF '+str(i+1)+' fraction: '+str("%.2f" % (cube.eof_var.data[i]*100))+'%')
         print(str("%.2f" % (n_fraction*100))+'% of the total variance explained by '+str(n_eofs)+' EOF modes.')
-        return cube.eof, cube.pcs
-    elif show_info == 'off':
-        return cube.eof, cube.pcs
+        return cube
+    elif show_info == False:
+        return cube
     else:
-        print 'Missing show_info="on" or show_info="off"'
+        print 'Missing show_info=True or show_info=False'
 
 def calculate_anomaly_monthlymean(var_inp):
     """ Calculates the anomalies and monthly mean for a numpy array
@@ -86,3 +89,15 @@ def generate_year_constraint_with_window(year, window):
     first_year = PartialDateTime(year=year-window)
     last_year = PartialDateTime(year=year+window)
     return Constraint(time=lambda cell: first_year <= cell.point <= last_year)
+
+def seasonal_mean(c, *args, **kwargs):
+    # Calculate the seasonal mean for all cubes in the cube list
+    import iris.coord_categorisation
+
+    iris.coord_categorisation.add_season(c, 'time', name='clim_season')
+    iris.coord_categorisation.add_season_year(c, 'time', name='season_year')
+    c = c.aggregated_by(
+        ['clim_season', 'season_year'],
+        iris.analysis.MEAN)
+
+    return c
