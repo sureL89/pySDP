@@ -9,7 +9,7 @@ class Downscaler(object):
     #              reference_period, time_unit='month', correction_period=None):
 
     def __init__(self, observation, reanalysis, reference_spatial,
-                 reference_period, validation_period, time_unit='month', explained_variance=0.9):
+                 reference_period, time_unit='month', explained_variance=0.9):
         """
         Args:
 
@@ -45,7 +45,6 @@ class Downscaler(object):
         #self.mod = model
         self.reference_period = reference_period
         self.reference_spatial = reference_spatial
-        self.validation_period = validation_period
         self.time_unit = time_unit
         self.explained_variance = explained_variance
 
@@ -89,18 +88,16 @@ class Downscaler(object):
                 c.data = c_detrended
                 cube_list[i] = c
 
-    def validate(self, *args, **kwargs):
+    def validate(self, reference_period, validation_period, *args, **kwargs):
         """
-        prepare data that is given to the model coefficient calculation method
+        validate data
 
         kwargs are passed to :meth:`call_func`
 
         Args:
 
-        * unit_list (None, int, iterable):
-            depending on self.time_unit this is interpreted as
-            all days/months of year (None), single day/month (int) or
-            list of days/months (iterable)
+        * reference_period
+        * validation_period
         """
         from .utils import calculate_anomaly_monthlymean, eof_pc_modes, seasonal_mean
         from scipy.signal import detrend
@@ -108,10 +105,10 @@ class Downscaler(object):
         import iris.iterate
 
         with iris.FUTURE.context(cell_datetime_objects=True):
-            rea_ref = self.rea.extract(self.reference_period)
-            rea_val = self.rea.extract(self.validation_period)
-            obs_ref = self.obs.extract(self.reference_period)
-            obs_val = self.obs.extract(self.validation_period)
+            rea_ref = self.rea.extract(reference_period)
+            rea_val = self.rea.extract(validation_period)
+            obs_ref = self.obs.extract(reference_period)
+            obs_val = self.obs.extract(validation_period)
 
         # Iterate over list of cube lists
         print("---------------------------------------")
@@ -135,30 +132,41 @@ class Downscaler(object):
         # Calculate model Coefficients
         print("---------------------------------------")
         print("Calculate model coefficients")
-        #obs_ref.modelcoeff = iris.cube.CubeList()
-        modelcoeff = []
-        for c_obs in obs_ref:
-            print("\tObservation: "+ c_obs.name())
-            for i,c_obs_seas in enumerate(c_obs.seas):
+
+        #c_modelcoeff = iris.cube.CubeList()
+        c_modelcoeff = iris.cube.CubeList()
+        c_projection = iris.cube.CubeList()
+
+        for c_obs_ref,c_obs_val in zip(obs_ref,obs_val):
+            print("\tObservation: "+ c_obs_ref.name())
+            for i,c_obs_seas in enumerate(c_obs_ref.seas):
                 print("\t\tSeason: "+ str(i))
                 pc_all_rea_fields = np.concatenate([c_rea.seas[i].pcs.data for c_rea in rea_ref],axis=1)
-                modelcoeff.append(np.linalg.lstsq(pc_all_rea_fields, c_obs_seas.data))
+                # modelcoeff.append(np.linalg.lstsq(pc_all_rea_fields, c_obs_seas.data))
+                c_modelcoeff.append(iris.cube.Cube(np.linalg.lstsq(pc_all_rea_fields, c_obs_seas.data)[0], long_name='model_coefficients', var_name='coeff'))
+                c_modelcoeff[i].add_dim_coord(
+                    iris.coords.DimCoord(
+                        range(pc_all_rea_fields.shape[-1]),
+                        long_name='pc_number',
+                        var_name='pc'),
+                    0)
+                c_modelcoeff[i].add_dim_coord(c_obs_ref.coord('station_wmo_id'), 1)
 
-        # Use model coefficient
-        print("---------------------------------------")
-        print("Project model coefficients")
-        projection = []
-        for c_obs in obs_val:
-            print("\tObservation: "+ c_obs.name())
-            for i,c_obs_seas in enumerate(c_obs.seas):
-                pc_all_rea_fields = np.concatenate([c_rea_ref.seas[i].solver.projectField(c_rea_val.seas[i], neofs=c_rea_ref.seas[i].neofs).data
-                                                    for c_rea_ref, c_rea_val in zip(rea_ref, rea_val)],axis=1)
-                projection.append(np.dot(pc_all_rea_fields,modelcoeff[i][0]))
+            for i,c_obs_seas in enumerate(c_obs_val.seas):
+                pc_all_rea_fields = np.concatenate([c_rea_ref.seas[i].solver.projectField(c_rea_val.seas[i], neofs=c_rea_ref.seas[i].neofs).data for c_rea_ref, c_rea_val in zip(rea_ref, rea_val)],axis=1)
+                c_projection.append(iris.cube.Cube(np.dot(pc_all_rea_fields,c_modelcoeff[i].data), long_name='projection', var_name='proj'))
+                c_projection[i].add_dim_coord(
+                    iris.coords.DimCoord(
+                        range(pc_all_rea_fields.shape[0]),
+                        long_name='time',
+                        var_name='time'),
+                    0)
+                c_projection[i].add_dim_coord(c_obs_val.coord('station_wmo_id'), 1)
 
 
 
-        self.modelcoeff = modelcoeff
-        self.projection = projection
+        self.modelcoeff = c_modelcoeff
+        self.projection = c_projection
         self.obs_ref = obs_ref
         self.rea_ref = rea_ref
         self.obs_val = obs_val
@@ -230,9 +238,9 @@ class GARDownscaler(Downscaler):
     """
 
     def __init__(self, observation, reanalysis, reference_spatial,
-                 reference_period, validation_period, *args, **kwargs):
+                 reference_period, *args, **kwargs):
         super(GARDownscaler, self).__init__(
             observation, reanalysis, reference_spatial,
-            reference_period, validation_period, time_unit='month', *args, **kwargs)
+            reference_period, time_unit='month', *args, **kwargs)
 
 
