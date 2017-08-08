@@ -1,4 +1,6 @@
 import iris
+from tempfile import gettempdir
+
 
 class Downscaler(object):
     """
@@ -9,7 +11,8 @@ class Downscaler(object):
     #              reference_period, time_unit='month', correction_period=None):
 
     def __init__(self, observation, reanalysis, reference_spatial,
-                 reference_period, time_unit='month', explained_variance=0.9):
+                 reference_period, time_unit='month', explained_variance=0.9,
+                 work_dir=gettempdir()):
         """
         Args:
 
@@ -111,59 +114,61 @@ class Downscaler(object):
             obs_val = self.obs.extract(validation_period)
 
         # Iterate over list of cube lists
-        print("---------------------------------------")
-        print("Reduce area, detrend, seasonal mean, calculate seasonal EOFs")
+        # Reduce area, detrend, seasonal mean, calculate seasonal EOFs
         for cube_list in [obs_ref, obs_val, rea_ref, rea_val]:
-            print("\tReduce area, detrend, seasonal mean")
             for i,c in enumerate(cube_list):
-                print("\t"+c.name())
                 c = self.area_detrended_anomalies(c)
                 c = seasonal_mean(c)
                 self.time_unit = "seasonal"
 
                 c.seas = iris.cube.CubeList()
                 for j,seas in enumerate(set(c.coord('clim_season').points)):
-                    print("\t\tEOF calucation for cube " + c.name() + " season " + seas)
                     c.seas.append(c.extract(iris.Constraint(clim_season=seas)))
                     c.seas[j] = eof_pc_modes(c.seas[j], self.explained_variance)
 
                 cube_list[i] = c
 
-        # Calculate model Coefficients
-        print("---------------------------------------")
-        print("Calculate model coefficients")
 
-        #c_modelcoeff = iris.cube.CubeList()
+        # Calculate model Coefficients
         c_modelcoeff = iris.cube.CubeList()
         c_projection = iris.cube.CubeList()
 
         for c_obs_ref,c_obs_val in zip(obs_ref,obs_val):
-            print("\tObservation: "+ c_obs_ref.name())
             for i,c_obs_seas in enumerate(c_obs_ref.seas):
-                print("\t\tSeason: "+ str(i))
-                pc_all_rea_fields = np.concatenate([c_rea.seas[i].pcs.data for c_rea in rea_ref],axis=1)
-                # modelcoeff.append(np.linalg.lstsq(pc_all_rea_fields, c_obs_seas.data))
-                c_modelcoeff.append(iris.cube.Cube(np.linalg.lstsq(pc_all_rea_fields, c_obs_seas.data)[0], long_name='model_coefficients', var_name='coeff'))
-                c_modelcoeff[i].add_dim_coord(
-                    iris.coords.DimCoord(
-                        range(pc_all_rea_fields.shape[-1]),
-                        long_name='pc_number',
-                        var_name='pc'),
-                    0)
-                c_modelcoeff[i].add_dim_coord(c_obs_ref.coord('station_wmo_id'), 1)
+                pc_all_rea_fields = np.concatenate(
+                    [c_rea.seas[i].pcs.data for c_rea in rea_ref],
+                    axis=1)
+
+                c_modelcoeff.append(iris.cube.Cube(
+                    np.linalg.lstsq(pc_all_rea_fields, c_obs_seas.data)[0],
+                    long_name='ESD Modelcoefficients of ' + self.obs[0].name(),
+                    var_name='coeff_' + self.obs[0].var_name))
+
+                c_modelcoeff[i].add_dim_coord(iris.coords.DimCoord(
+                    range(pc_all_rea_fields.shape[-1]),
+                    long_name = 'coeff',
+                    var_name = 'coeff'),
+                0)
+                c_modelcoeff[i].add_dim_coord(c_obs_val.coord('station_wmo_id'), 1)
+                [c_modelcoeff[i].add_aux_coord(aux_c,1) for aux_c in self.obs[0].aux_coords]
 
             for i,c_obs_seas in enumerate(c_obs_val.seas):
-                pc_all_rea_fields = np.concatenate([c_rea_ref.seas[i].solver.projectField(c_rea_val.seas[i], neofs=c_rea_ref.seas[i].neofs).data for c_rea_ref, c_rea_val in zip(rea_ref, rea_val)],axis=1)
-                c_projection.append(iris.cube.Cube(np.dot(pc_all_rea_fields,c_modelcoeff[i].data), long_name='projection', var_name='proj'))
-                c_projection[i].add_dim_coord(
-                    iris.coords.DimCoord(
-                        range(pc_all_rea_fields.shape[0]),
-                        long_name='time',
-                        var_name='time'),
-                    0)
+
+                pc_all_rea_fields = np.concatenate(
+                    [c_rea_ref.seas[i].solver.projectField(
+                        c_rea_val.seas[i],
+                        neofs=c_rea_ref.seas[i].neofs).data
+                     for c_rea_ref, c_rea_val in zip(rea_ref, rea_val)],
+                    axis=1)
+
+                c_projection.append(iris.cube.Cube(
+                    np.dot(pc_all_rea_fields,c_modelcoeff[i].data),
+                    long_name='ESD Projection of ' + self.obs[0].name(),
+                    var_name=self.obs[0].var_name))
+
+                c_projection[i].add_dim_coord(rea_val[0].seas[i].coord('time'), 0)
                 c_projection[i].add_dim_coord(c_obs_val.coord('station_wmo_id'), 1)
-
-
+                [c_projection[i].add_aux_coord(aux_c,1) for aux_c in self.obs[0].aux_coords]
 
         self.modelcoeff = c_modelcoeff
         self.projection = c_projection
@@ -172,14 +177,6 @@ class Downscaler(object):
         self.obs_val = obs_val
         self.rea_val = rea_val
 
-
-        # for c in rea_ref:
-        #     c.rea_ref_seas = {}
-        #     for seas in set(c.coord('clim_season').points):
-        #         print("---------------------------------------")
-        #         print("EOF calucation for cube " + c.name() + " season " + seas)
-        #         c.rea_ref_seas[seas]  = c.extract(iris.Constraint(clim_season=seas))
-        #         c.rea_ref_seas[seas].eof, c.rea_ref_seas[seas].pcs, c.rea_ref_seas[seas].solver  = eof_pc_modes(c.rea_ref_seas[seas], self.explained_variance, show_info=True)
 
 
     def seasonal_mean(self, *args, **kwargs):

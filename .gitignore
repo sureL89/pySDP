@@ -1,3 +1,23 @@
+*.pyc
+*~
+*.log
+\#*
+.\#*
+*.dev
+*.db
+MANIFEST
+build/
+dist/
+code/
+_build
+_static
+_templates
+tttt*
+/devel
+files.txt
+callbacks.py
+siteconfig.py
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
