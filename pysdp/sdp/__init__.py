@@ -106,7 +106,7 @@ class Downscaler(object):
         from scipy.signal import detrend
         from scipy.linalg import lstsq
         import numpy as np
-        import iris.iterate
+        import iris.coord_categorisation
 
         with iris.FUTURE.context(cell_datetime_objects=True):
             rea_ref = self.rea.extract(reference_period)
@@ -120,11 +120,12 @@ class Downscaler(object):
             for i,c in enumerate(cube_list):
                 c = self.area_detrended_anomalies(c)
                 # c = seasonal_mean(c)
-                self.time_unit = "seasonal"
+                # self.time_unit = "seasonal"
+                iris.coord_categorisation.add_month(c, 'time', name='month')
 
                 c.seas = iris.cube.CubeList()
-                for j,seas in enumerate(set(c.coord('clim_season').points)):
-                    c.seas.append(c.extract(iris.Constraint(clim_season=seas)))
+                for j,j_month in enumerate(set(c.coord('month').points)):
+                    c.seas.append(c.extract(iris.Constraint(month=j_month)))
                     c.seas[j] = eof_pc_modes(c.seas[j], self.explained_variance)
 
                 cube_list[i] = c
