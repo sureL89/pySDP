@@ -123,9 +123,9 @@ class Downscaler(object):
                 # self.time_unit = "seasonal"
                 iris.coord_categorisation.add_month(c, 'time', name='month')
 
-                c.seas = iris.cube.CubeList()
+                c.cl_time = iris.cube.CubeList()
                 for j,j_month in enumerate(set(c.coord('month').points)):
-                    c.seas.append(c.extract(iris.Constraint(month=j_month)))
+                    c.cl_time.append(c.extract(iris.Constraint(month=j_month)))
 
                 cube_list[i] = c
 
@@ -136,11 +136,11 @@ class Downscaler(object):
                 # self.time_unit = "seasonal"
                 iris.coord_categorisation.add_month(c, 'time', name='month')
 
-                c.seas = iris.cube.CubeList()
+                c.cl_time = iris.cube.CubeList()
                 for j,j_month in enumerate(set(c.coord('month').points)):
-                    c.seas.append(c.extract(iris.Constraint(month=j_month)))
-                    # c.seas[j].data = c.seas[j].data/np.nanstd(c.seas[j].data,axis=0)
-                    c.seas[j] = eof_pc_modes(c.seas[j], self.explained_variance)
+                    c.cl_time.append(c.extract(iris.Constraint(month=j_month)))
+                    # c.cl_time[j].data = c.cl_time[j].data/np.nanstd(c.cl_time[j].data,axis=0)
+                    c.cl_time[j] = eof_pc_modes(c.cl_time[j], self.explained_variance)
 
                 cube_list[i] = c
 
@@ -150,18 +150,18 @@ class Downscaler(object):
 
         for c_obs_ref,c_obs_val in zip(obs_ref,obs_val):
             # Calculate model Coefficients
-            for i,c_obs_seas in enumerate(c_obs_ref.seas):
+            for i,c_obs_cl_time in enumerate(c_obs_ref.cl_time):
                 pc_all_rea_fields = np.concatenate(
-                    [c_rea.seas[i].pcs.data for c_rea in rea_ref],
+                    [c_rea.cl_time[i].pcs.data for c_rea in rea_ref],
                     axis=1)
 
-                if isinstance(c_obs_seas.data, np.ma.MaskedArray):
-                    mask = ~c_obs_seas.data.mask
-                elif isinstance(c_obs_seas.data, np.ndarray):
-                    c_obs_seas.data = np.ma.MaskedArray(
-                        c_obs_seas.data,
-                        ~np.ma.make_mask(c_obs_seas.data))
-                    mask = (c_obs_seas.data!=np.nan)
+                if isinstance(c_obs_cl_time.data, np.ma.MaskedArray):
+                    mask = ~c_obs_cl_time.data.mask
+                elif isinstance(c_obs_cl_time.data, np.ndarray):
+                    c_obs_cl_time.data = np.ma.MaskedArray(
+                        c_obs_cl_time.data,
+                        ~np.ma.make_mask(c_obs_cl_time.data))
+                    mask = (c_obs_cl_time.data!=np.nan)
                 else:
                     print("Wrong data Object, we need numpy.ndarray or numpy.ma.MaskedArray")
                     raise
@@ -169,12 +169,12 @@ class Downscaler(object):
                 # lstsq for every station in loop due to missing values
                 c_modelcoeff.append(iris.cube.Cube(
                     np.vstack(
-                        [lstsq(pc_all_rea_fields[~c_obs_seas.data[:,j].mask,:],
-                               c_obs_seas.data[~c_obs_seas.data[:,j].mask,j].data)[0]
-                         for j in range(c_obs_seas.shape[-1]) ]).swapaxes(0,-1),
+                        [lstsq(pc_all_rea_fields[~c_obs_cl_time.data[:,j].mask,:],
+                               c_obs_cl_time.data[~c_obs_cl_time.data[:,j].mask,j].data)[0]
+                         for j in range(c_obs_cl_time.shape[-1]) ]).swapaxes(0,-1),
                         # [lstsq(pc_all_rea_fields[mask[:,j],:],
-                        #        c_obs_seas.data[mask[:,j],j].data)[0]
-                        #  for j in range(c_obs_seas.shape[-1]) ]).swapaxes(0,-1),
+                        #        c_obs_cl_time.data[mask[:,j],j].data)[0]
+                        #  for j in range(c_obs_cl_time.shape[-1]) ]).swapaxes(0,-1),
                     long_name='ESD Modelcoefficients of ' + self.obs[0].name(),
                     var_name='coeff_' + self.obs[0].var_name))
 
@@ -188,26 +188,34 @@ class Downscaler(object):
                 [c_modelcoeff[i].add_aux_coord(aux_c,1) for aux_c in self.obs[0].aux_coords]
 
             # Project validation onto reference EOFs and calculate projections
-            for i,c_obs_seas in enumerate(c_obs_val.seas):
+            for i,c_obs_cl_time in enumerate(c_obs_val.cl_time):
                 pc_all_rea_fields = np.concatenate(
-                    [c_rea_ref.seas[i].solver.projectField(
-                        c_rea_val.seas[i],
-                        neofs=c_rea_ref.seas[i].neofs).data
+                    [c_rea_ref.cl_time[i].solver.projectField(
+                        c_rea_val.cl_time[i],
+                        neofs=c_rea_ref.cl_time[i].neofs).data
                      for c_rea_ref, c_rea_val in zip(rea_ref, rea_val)],
                     axis=1)
 
                 c_projection.append(iris.cube.Cube(
                     np.dot(pc_all_rea_fields,c_modelcoeff[i].data),
                     long_name='ESD Projection of ' + self.obs[0].name(),
-                    var_name=self.obs[0].var_name))
+                    var_name=self.obs[0].var_name,
+                    units=c_obs_cl_time.units))
 
-                # c_projection[i].add_dim_coord(rea_val[0].seas[i].coord('time'), 0)
-                c_projection[i].add_dim_coord(c_obs_seas.coord('time'), 0)
+                # c_projection[i].add_dim_coord(rea_val[0].cl_time[i].coord('time'), 0)
+                c_projection[i].add_dim_coord(c_obs_cl_time.coord('time'), 0)
                 c_projection[i].add_dim_coord(c_obs_val.coord('station_wmo_id'), 1)
                 [c_projection[i].add_aux_coord(aux_c,1) for aux_c in self.obs[0].aux_coords]
 
+            c_projection_final = iris.cube.CubeList()
+            for i in range(c_obs_val.shape[0]/len(c_projection)):
+                [c_projection_final.append(c[i:i+1,...]) for c in c_projection]
+
+            c_projection_final = c_projection_final.concatenate()
+
+
         self.modelcoeff = c_modelcoeff
-        self.projection = c_projection
+        self.projection = c_projection_final
         self.obs_ref = obs_ref
         self.rea_ref = rea_ref
         self.obs_val = obs_val
