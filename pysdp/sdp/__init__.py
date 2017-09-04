@@ -95,10 +95,7 @@ class Downscaler(object):
         """
         validate data
 
-        kwargs are passed to :meth:`call_func`
-
         Args:
-
         * reference_period
         * validation_period
         """
@@ -176,7 +173,7 @@ class Downscaler(object):
                         #        c_obs_cl_time.data[mask[:,j],j].data)[0]
                         #  for j in range(c_obs_cl_time.shape[-1]) ]).swapaxes(0,-1),
                     long_name='ESD Modelcoefficients of ' + self.obs[0].name(),
-                    var_name='coeff_' + self.obs[0].var_name))
+                    var_name='_'.join(['coeff', self.obs[0].var_name])))
 
                 c_modelcoeff[i].add_dim_coord(iris.coords.DimCoord(
                     range(pc_all_rea_fields.shape[-1]),
@@ -199,7 +196,7 @@ class Downscaler(object):
                 c_projection.append(iris.cube.Cube(
                     np.dot(pc_all_rea_fields,c_modelcoeff[i].data),
                     long_name='ESD Projection of ' + self.obs[0].name(),
-                    var_name=self.obs[0].var_name,
+                    var_name='_'.join(['esd','proj', self.obs[0].var_name]),
                     units=c_obs_cl_time.units))
 
                 # c_projection[i].add_dim_coord(rea_val[0].cl_time[i].coord('time'), 0)
@@ -213,13 +210,12 @@ class Downscaler(object):
 
             c_projection_final = c_projection_final.concatenate()
 
-
-        self.modelcoeff = c_modelcoeff
-        self.projection = c_projection_final
-        self.obs_ref = obs_ref
-        self.rea_ref = rea_ref
-        self.obs_val = obs_val
-        self.rea_val = rea_val
+        [c_obs_val.remove_coord('month') for c_obs_val in obs_val]
+        return c_modelcoeff, c_projection_final, obs_val
+        # self.obs_ref = obs_ref
+        # self.rea_ref = rea_ref
+        # self.obs_val = obs_val
+        # self.rea_val = rea_val
 
 
 
