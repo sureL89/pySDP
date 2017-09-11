@@ -101,3 +101,15 @@ def seasonal_mean(c, *args, **kwargs):
         iris.analysis.MEAN)
 
     return c
+
+def seasonal_sum(c, *args, **kwargs):
+    # Calculate the seasonal mean for all cubes in the cube list
+    import iris.coord_categorisation
+
+    iris.coord_categorisation.add_season(c, 'time', name='clim_season')
+    iris.coord_categorisation.add_season_year(c, 'time', name='season_year')
+    c = c.aggregated_by(
+        ['clim_season', 'season_year'],
+        iris.analysis.SUM)
+
+    return c
