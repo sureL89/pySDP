@@ -25,19 +25,26 @@ from eofs.iris import Eof
 import numpy as np
 
 
-def eof_pc_modes(cube, fraction_explained, show_info=False):
+def eof_pc_modes(cube, fraction_explained, neofs_pred=None, show_info=False):
     n_eofs = 0
     n_fraction = 0
     solver = Eof(cube, weights='coslat')
-    # Number of EOFs needed to explain the fraction (fraction_explained) of the total variance
-    while n_fraction < fraction_explained:
-        n_eofs = n_eofs+1
-        cube.eof_var = solver.varianceFraction(neigs=n_eofs)
-        n_fraction = np.sum(cube.eof_var.data)
-    cube.eof = solver.eofs(neofs=n_eofs)
-    cube.pcs = solver.pcs(npcs=n_eofs)
-    cube.solver = solver
-    cube.neofs = n_eofs
+    if neofs_pred is None:
+        # Number of EOFs needed to explain the fraction (fraction_explained) of the total variance
+        while n_fraction < fraction_explained:
+            n_eofs = n_eofs+1
+            cube.eof_var = solver.varianceFraction(neigs=n_eofs)
+            n_fraction = np.sum(cube.eof_var.data)
+        cube.eof = solver.eofs(neofs=n_eofs)
+        cube.pcs = solver.pcs(npcs=n_eofs)
+        cube.solver = solver
+        cube.neofs = n_eofs
+    else:
+        cube.eof = solver.eofs(neofs=neofs_pred)
+        cube.pcs = solver.pcs(npcs=neofs_pred)
+        cube.solver = solver
+        cube.neofs = neofs_pred
+
     # Function return
     if show_info:
         for i in range(0,n_eofs):

@@ -91,7 +91,7 @@ class Downscaler(object):
                 c.data = c_detrended
                 cube_list[i] = c
 
-    def validate(self, reference_period, validation_period, *args, **kwargs):
+    def validate(self, reference_period, validation_period, neofs_pred=None, *args, **kwargs):
         """
         validate data
 
@@ -116,10 +116,9 @@ class Downscaler(object):
         for cube_list in [obs_ref, obs_val]:
             for i,c in enumerate(cube_list):
                 c = self.area_detrended_anomalies(c)
-                # c = seasonal_mean(c)
-                # self.time_unit = "seasonal"
                 iris.coord_categorisation.add_month(c, 'time', name='month')
 
+                # Extract by time
                 c.cl_time = iris.cube.CubeList()
                 for j,j_month in enumerate(set(c.coord('month').points)):
                     c.cl_time.append(c.extract(iris.Constraint(month=j_month)))
@@ -129,15 +128,18 @@ class Downscaler(object):
         for cube_list in [rea_ref, rea_val]:
             for i,c in enumerate(cube_list):
                 c = self.area_detrended_anomalies(c)
-                # c = seasonal_mean(c)
-                # self.time_unit = "seasonal"
                 iris.coord_categorisation.add_month(c, 'time', name='month')
 
+                # Extract by time
                 c.cl_time = iris.cube.CubeList()
                 for j,j_month in enumerate(set(c.coord('month').points)):
                     c.cl_time.append(c.extract(iris.Constraint(month=j_month)))
-                    # c.cl_time[j].data = c.cl_time[j].data/np.nanstd(c.cl_time[j].data,axis=0)
-                    c.cl_time[j] = eof_pc_modes(c.cl_time[j], self.explained_variance)
+
+                    c.cl_time[j].data = c.cl_time[j].data/np.nanstd(c.cl_time[j].data)
+                    if neofs_pred is None:
+                        c.cl_time[j] = eof_pc_modes(c.cl_time[j], self.explained_variance)
+                    else:
+                        c.cl_time[j] = eof_pc_modes(c.cl_time[j], self.explained_variance, neofs_pred[i])
 
                 cube_list[i] = c
 
@@ -166,7 +168,7 @@ class Downscaler(object):
                 # lstsq for every station in loop due to missing values
                 c_modelcoeff.append(iris.cube.Cube(
                     np.vstack(
-                        [lstsq(pc_all_rea_fields[~c_obs_cl_time.data[:,j].mask,:],
+                        [ lstsq(pc_all_rea_fields[~c_obs_cl_time.data[:,j].mask,:],
                                c_obs_cl_time.data[~c_obs_cl_time.data[:,j].mask,j].data)[0]
                          for j in range(c_obs_cl_time.shape[-1]) ]).swapaxes(0,-1),
                         # [lstsq(pc_all_rea_fields[mask[:,j],:],
