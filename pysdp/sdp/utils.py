@@ -56,7 +56,7 @@ def eof_pc_modes(cube, fraction_explained, neofs_pred=None, show_info=False):
     else:
         print 'Missing show_info=True or show_info=False'
 
-def calculate_anomaly_monthlymean(var_inp):
+def calculate_anomaly_monthlymean(var_inp, var_monthMean=None):
     """ Calculates the anomalies and monthly mean for a numpy array
 
     Args:
@@ -70,7 +70,8 @@ def calculate_anomaly_monthlymean(var_inp):
 
     var_reshape = np.reshape(var_inp, reshape_dim, order='C')
 
-    var_monthMean = np.mean(var_reshape, axis=0)
+    if var_monthMean is None:
+        var_monthMean = np.mean(var_reshape, axis=0)
 
     var_anom = var_reshape - var_monthMean
     var_anom = np.reshape(var_anom, orig_dim, order='C')
