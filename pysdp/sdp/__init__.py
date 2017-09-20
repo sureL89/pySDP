@@ -77,6 +77,12 @@ class Downscaler(object):
             rea_ref = self.rea.extract(self.reference_period)
             obs_ref = self.obs.extract(self.reference_period)
 
+        c_modelcoeff = iris.cube.CubeList()
+        cl_projection = iris.cube.CubeList()
+        cl_scenarios = iris.cube.CubeList()
+        cl_picontrol = iris.cube.CubeList()
+        cl_obs = iris.cube.CubeList()
+
         # Iterate over list of cube lists
         # Reduce area, detrend, seasonal mean, calculate seasonal EOFs
         for cube_list in [obs_ref]:
@@ -90,6 +96,7 @@ class Downscaler(object):
                     c.cl_time.append(c.extract(iris.Constraint(month=j_month)))
 
                 cube_list[i] = c
+                cl_obs.append(c)
 
         for cube_list in [rea_ref]:
             for i,c in enumerate(cube_list):
@@ -109,9 +116,6 @@ class Downscaler(object):
 
                 cube_list[i] = c
 
-        c_modelcoeff = iris.cube.CubeList()
-        c_projection = iris.cube.CubeList()
-        cl_scenarios = iris.cube.CubeList()
 
         # for cl_sce in self.scenarios:
             # for c_pi, c_sce in zip(obs_ref, self.picontrol, cl_sce):
@@ -126,7 +130,7 @@ class Downscaler(object):
                 c_sce.cl_time[j].data = c_sce.cl_time[j].data/np.nanstd(c_sce.cl_time[j].data)
 
             cl_scenarios.append(c_sce)
-
+            cl_picontrol.append(c_pi)
 
 
 
@@ -176,26 +180,24 @@ class Downscaler(object):
                     for c_rea_ref, c_scenarios in zip(rea_ref, cl_scenarios)],
                     axis=1)
 
-                c_projection.append(iris.cube.Cube(
+                cl_projection.append(iris.cube.Cube(
                     np.dot(pc_all_rea_fields,c_modelcoeff[i].data),
                     long_name='ESD Projection of ' + self.obs[0].name(),
                     var_name='_'.join(['esd','proj', self.obs[0].var_name]),
                     units=c_obs_cl_time.units))
 
-                c_projection[i].add_dim_coord(cl_scenarios[0].cl_time[i].coord('time'), 0)
-                # c_projection[i].add_dim_coord(c_obs_cl_time.coord('time'), 0)
-                c_projection[i].add_dim_coord(c_obs_ref.coord('station_wmo_id'), 1)
-                [c_projection[i].add_aux_coord(aux_c,1) for aux_c in self.obs[0].aux_coords]
+                cl_projection[i].add_dim_coord(cl_scenarios[0].cl_time[i].coord('time'), 0)
+                cl_projection[i].add_dim_coord(c_obs_ref.coord('station_wmo_id'), 1)
+                [cl_projection[i].add_aux_coord(aux_c,1) for aux_c in self.obs[0].aux_coords]
 
-            c_projection_final = iris.cube.CubeList()
-            for i in range(cl_scenarios[0].shape[0]/len(c_projection)):
-                [c_projection_final.append(c[i:i+1,...]) for c in c_projection]
+            cl_projection_final = iris.cube.CubeList()
+            for i in range(cl_scenarios[0].shape[0]/len(cl_projection)):
+                [cl_projection_final.append(c[i:i+1,...]) for c in cl_projection]
 
-            c_projection_final = c_projection_final.concatenate()
+            cl_projection_final = cl_projection_final.concatenate()
 
-            import ipdb; ipdb.set_trace()
 
-        return c_projection_final
+        return cl_projection_final, cl_obs
 
 
 
@@ -254,7 +256,7 @@ class Downscaler(object):
 
 
         c_modelcoeff = iris.cube.CubeList()
-        c_projection = iris.cube.CubeList()
+        cl_projection = iris.cube.CubeList()
 
         for c_obs_ref,c_obs_val in zip(obs_ref,obs_val):
             # Calculate model Coefficients
@@ -304,25 +306,25 @@ class Downscaler(object):
                      for c_rea_ref, c_rea_val in zip(rea_ref, rea_val)],
                     axis=1)
 
-                c_projection.append(iris.cube.Cube(
+                cl_projection.append(iris.cube.Cube(
                     np.dot(pc_all_rea_fields,c_modelcoeff[i].data),
                     long_name='ESD Projection of ' + self.obs[0].name(),
                     var_name='_'.join(['esd','proj', self.obs[0].var_name]),
                     units=c_obs_cl_time.units))
 
-                # c_projection[i].add_dim_coord(rea_val[0].cl_time[i].coord('time'), 0)
-                c_projection[i].add_dim_coord(c_obs_cl_time.coord('time'), 0)
-                c_projection[i].add_dim_coord(c_obs_val.coord('station_wmo_id'), 1)
-                [c_projection[i].add_aux_coord(aux_c,1) for aux_c in self.obs[0].aux_coords]
+                # cl_projection[i].add_dim_coord(rea_val[0].cl_time[i].coord('time'), 0)
+                cl_projection[i].add_dim_coord(c_obs_cl_time.coord('time'), 0)
+                cl_projection[i].add_dim_coord(c_obs_val.coord('station_wmo_id'), 1)
+                [cl_projection[i].add_aux_coord(aux_c,1) for aux_c in self.obs[0].aux_coords]
 
-            c_projection_final = iris.cube.CubeList()
-            for i in range(c_obs_val.shape[0]/len(c_projection)):
-                [c_projection_final.append(c[i:i+1,...]) for c in c_projection]
+            cl_projection_final = iris.cube.CubeList()
+            for i in range(c_obs_val.shape[0]/len(cl_projection)):
+                [cl_projection_final.append(c[i:i+1,...]) for c in cl_projection]
 
-            c_projection_final = c_projection_final.concatenate()
+            cl_projection_final = cl_projection_final.concatenate()
 
         [c_obs_val.remove_coord('month') for c_obs_val in obs_val]
-        return c_modelcoeff, c_projection_final, obs_val
+        return c_modelcoeff, cl_projection_final, obs_val
 
 
     def seasonal_mean(self, *args, **kwargs):
@@ -370,6 +372,7 @@ class Downscaler(object):
             c_detrended = detrend(c_anom, type='constant', axis=0)
 
         c.data = c_detrended
+        c.monthMean = c_monthMean
 
         return c
 
@@ -391,6 +394,7 @@ class Downscaler(object):
         _, c_pi_monthMean = calculate_anomaly_monthlymean(c_pi_data)
         # Calculate monthly Anomalies
         c_sce.data, c_sce_monthMean = calculate_anomaly_monthlymean(c_sce_data, c_pi_monthMean)
+        #c_sce.data, c_sce_monthMean = calculate_anomaly_monthlymean(c_sce_data, None)
 
         return c_sce, c_pi_monthMean
 
