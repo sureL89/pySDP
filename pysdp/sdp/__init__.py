@@ -7,9 +7,6 @@ class Downscaler(object):
     Base class for all Downscaling classes
     """
 
-    # def __init__(self, call_func, observation, model, reference_spatial,
-    #              reference_period, time_unit='month', correction_period=None):
-
     def __init__(self, observation, reanalysis, gcm_picontrol, gcm_scenarios,
                  reference_spatial, reference_period, time_unit='month',
                  explained_variance=0.9, work_dir=gettempdir()):
@@ -42,15 +39,14 @@ class Downscaler(object):
             the period for which the correction shall be done
         """
 
-        # self.call_func = call_func
         self.obs = observation
         self.rea = reanalysis
         self.picontrol = gcm_picontrol
         self.scenarios = gcm_scenarios
         self.reference_period = reference_period
         self.reference_spatial = reference_spatial
-        self.time_unit = time_unit
         self.explained_variance = explained_variance
+        self.time_unit = time_unit
 
 
     def prepare(self, neofs_pred=None, *args, **kwargs):
@@ -68,58 +64,116 @@ class Downscaler(object):
         """
         import iris.coord_categorisation
         from .utils import calculate_anomaly_monthlymean, eof_pc_modes, seasonal_mean
-        from scipy.signal import detrend
         from scipy.linalg import lstsq
         import numpy as np
-        import itertools
 
         with iris.FUTURE.context(cell_datetime_objects=True):
             rea_ref = self.rea.extract(self.reference_period)
             obs_ref = self.obs.extract(self.reference_period)
 
-        c_modelcoeff = iris.cube.CubeList()
+        cl_modelcoeff = iris.cube.CubeList()
+        cl_obs = iris.cube.CubeList()
+        cl_rea = iris.cube.CubeList()
+
+        # Calculate anomalies and mean, detrend, extract time
+        for c in obs_ref:
+            c = self.area_detrended_anomalies(c)
+            iris.coord_categorisation.add_month(c, 'time', name='month')
+
+            # Extract by time
+            c.cl_time = iris.cube.CubeList()
+            for j,j_month in enumerate(set(c.coord('month').points)):
+                c.cl_time.append(c.extract(iris.Constraint(month=j_month)))
+
+            cl_obs.append(c)
+
+
+        # Reduce area, calculate anomalies, detrend, extract time, calculate EOFs
+        for c in rea_ref:
+            c = self.area_detrended_anomalies(c)
+            iris.coord_categorisation.add_month(c, 'time', name='month')
+
+            # Extract by time
+            c.cl_time = iris.cube.CubeList()
+            for j,j_month in enumerate(set(c.coord('month').points)):
+                c.cl_time.append(c.extract(iris.Constraint(month=j_month)))
+
+                c.cl_time[j].data = c.cl_time[j].data/np.nanstd(c.cl_time[j].data)
+                if neofs_pred is None:
+                    c.cl_time[j] = eof_pc_modes(c.cl_time[j], self.explained_variance)
+                else:
+                    c.cl_time[j] = eof_pc_modes(c.cl_time[j], self.explained_variance, neofs_pred[i])
+
+            cl_rea.append(c)
+
+
+        # Calculate model Coefficients
+        for c_obs in cl_obs:
+            for i,cl_time in enumerate(c_obs.cl_time):
+                pc_all_rea_fields = np.concatenate(
+                    [c_rea.cl_time[i].pcs.data for c_rea in cl_rea],
+                    axis=1)
+
+                if isinstance(cl_time.data, np.ma.MaskedArray):
+                    mask = ~cl_time.data.mask
+                elif isinstance(cl_time.data, np.ndarray):
+                    cl_time.data = np.ma.MaskedArray(
+                        cl_time.data,
+                        ~np.ma.make_mask(cl_time.data))
+                    mask = (cl_time.data!=np.nan)
+                else:
+                    print("Wrong data Object, we need numpy.ndarray or numpy.ma.MaskedArray")
+                    raise
+
+                # lstsq for every station in loop due to missing values
+                cl_modelcoeff.append(iris.cube.Cube(
+                    np.vstack(
+                        [ lstsq(pc_all_rea_fields[~cl_time.data[:,j].mask,:],
+                                cl_time.data[~cl_time.data[:,j].mask,j].data)[0]
+                          for j in range(cl_time.shape[-1]) ]).swapaxes(0,-1),
+                    long_name='ESD Modelcoefficients of ' + self.obs[0].name(),
+                    var_name='_'.join(['coeff', self.obs[0].var_name])))
+
+                cl_modelcoeff[i].add_dim_coord(iris.coords.DimCoord(
+                    range(pc_all_rea_fields.shape[-1]),
+                    long_name = 'coeff',
+                    var_name = 'coeff'),
+                0)
+
+                cl_modelcoeff[i].add_dim_coord(c_obs.coord('station_wmo_id'), 1)
+                [cl_modelcoeff[i].add_aux_coord(aux_c,1) for aux_c in self.obs[0].aux_coords]
+
+        [c.remove_coord('month') for c in cl_rea]
+        [c.remove_coord('month') for c in cl_obs]
+
+        self.rea = cl_rea
+        self.obs = cl_obs
+        self.modelcoeff = cl_modelcoeff
+
+
+    def project(self, picontrol, scenarios, *args, **kwargs):
+        """
+        project the scenario data
+
+        kwargs are passed to :meth:`call_func`
+
+        Args:
+
+        * unit_list (None, int, iterable):
+            depending on self.time_unit this is interpreted as
+            all days/months of year (None), single day/month (int) or
+            list of days/months (iterable)
+        """
+        import iris.coord_categorisation
+        from scipy.linalg import lstsq
+        import numpy as np
+        import itertools
+
         cl_projection = iris.cube.CubeList()
         cl_scenarios = iris.cube.CubeList()
         cl_picontrol = iris.cube.CubeList()
-        cl_obs = iris.cube.CubeList()
 
-        # Iterate over list of cube lists
-        # Reduce area, detrend, seasonal mean, calculate seasonal EOFs
-        for cube_list in [obs_ref]:
-            for i,c in enumerate(cube_list):
-                c = self.area_detrended_anomalies(c)
-                iris.coord_categorisation.add_month(c, 'time', name='month')
-
-                # Extract by time
-                c.cl_time = iris.cube.CubeList()
-                for j,j_month in enumerate(set(c.coord('month').points)):
-                    c.cl_time.append(c.extract(iris.Constraint(month=j_month)))
-
-                cube_list[i] = c
-                cl_obs.append(c)
-
-        for cube_list in [rea_ref]:
-            for i,c in enumerate(cube_list):
-                c = self.area_detrended_anomalies(c)
-                iris.coord_categorisation.add_month(c, 'time', name='month')
-
-                # Extract by time
-                c.cl_time = iris.cube.CubeList()
-                for j,j_month in enumerate(set(c.coord('month').points)):
-                    c.cl_time.append(c.extract(iris.Constraint(month=j_month)))
-
-                    c.cl_time[j].data = c.cl_time[j].data/np.nanstd(c.cl_time[j].data)
-                    if neofs_pred is None:
-                        c.cl_time[j] = eof_pc_modes(c.cl_time[j], self.explained_variance)
-                    else:
-                        c.cl_time[j] = eof_pc_modes(c.cl_time[j], self.explained_variance, neofs_pred[i])
-
-                cube_list[i] = c
-
-
-        # for cl_sce in self.scenarios:
-            # for c_pi, c_sce in zip(obs_ref, self.picontrol, cl_sce):
-        for c_pi, c_sce in itertools.izip(self.picontrol, self.scenarios):
+        for c_pi, c_sce in itertools.izip(picontrol, scenarios):
             c_sce, c_pi.monthly_mean = self.gcm_redarea_anomalies(self.reference_spatial, c_pi, c_sce)
             iris.coord_categorisation.add_month(c_sce, 'time', name='month')
 
@@ -133,61 +187,24 @@ class Downscaler(object):
             cl_picontrol.append(c_pi)
 
 
-
-        for c_obs_ref in obs_ref:
-            # Calculate model Coefficients
-            for i,c_obs_cl_time in enumerate(c_obs_ref.cl_time):
+        # Project validation onto reference EOFs and calculate projections
+        for c_obs in self.obs:
+            for i,cl_time in enumerate(c_obs.cl_time):
                 pc_all_rea_fields = np.concatenate(
-                    [c_rea.cl_time[i].pcs.data for c_rea in rea_ref],
-                    axis=1)
-
-                if isinstance(c_obs_cl_time.data, np.ma.MaskedArray):
-                    mask = ~c_obs_cl_time.data.mask
-                elif isinstance(c_obs_cl_time.data, np.ndarray):
-                    c_obs_cl_time.data = np.ma.MaskedArray(
-                        c_obs_cl_time.data,
-                        ~np.ma.make_mask(c_obs_cl_time.data))
-                    mask = (c_obs_cl_time.data!=np.nan)
-                else:
-                    print("Wrong data Object, we need numpy.ndarray or numpy.ma.MaskedArray")
-                    raise
-
-                # lstsq for every station in loop due to missing values
-                c_modelcoeff.append(iris.cube.Cube(
-                    np.vstack(
-                        [ lstsq(pc_all_rea_fields[~c_obs_cl_time.data[:,j].mask,:],
-                            c_obs_cl_time.data[~c_obs_cl_time.data[:,j].mask,j].data)[0]
-                        for j in range(c_obs_cl_time.shape[-1]) ]).swapaxes(0,-1),
-                    long_name='ESD Modelcoefficients of ' + self.obs[0].name(),
-                    var_name='_'.join(['coeff', self.obs[0].var_name])))
-
-                c_modelcoeff[i].add_dim_coord(iris.coords.DimCoord(
-                    range(pc_all_rea_fields.shape[-1]),
-                    long_name = 'coeff',
-                    var_name = 'coeff'),
-                0)
-
-                c_modelcoeff[i].add_dim_coord(c_obs_ref.coord('station_wmo_id'), 1)
-                [c_modelcoeff[i].add_aux_coord(aux_c,1) for aux_c in self.obs[0].aux_coords]
-
-
-            # Project validation onto reference EOFs and calculate projections
-            for i,c_obs_cl_time in enumerate(c_obs_ref.cl_time):
-                pc_all_rea_fields = np.concatenate(
-                    [c_rea_ref.cl_time[i].solver.projectField(
+                    [c_rea.cl_time[i].solver.projectField(
                         c_scenarios.cl_time[i],
-                        neofs=c_rea_ref.cl_time[i].neofs).data
-                    for c_rea_ref, c_scenarios in zip(rea_ref, cl_scenarios)],
+                        neofs=c_rea.cl_time[i].neofs).data
+                    for c_rea, c_scenarios in zip(self.rea, cl_scenarios)],
                     axis=1)
 
                 cl_projection.append(iris.cube.Cube(
-                    np.dot(pc_all_rea_fields,c_modelcoeff[i].data),
+                    np.dot(pc_all_rea_fields,self.modelcoeff[i].data),
                     long_name='ESD Projection of ' + self.obs[0].name(),
                     var_name='_'.join(['esd','proj', self.obs[0].var_name]),
-                    units=c_obs_cl_time.units))
+                    units=cl_time.units))
 
                 cl_projection[i].add_dim_coord(cl_scenarios[0].cl_time[i].coord('time'), 0)
-                cl_projection[i].add_dim_coord(c_obs_ref.coord('station_wmo_id'), 1)
+                cl_projection[i].add_dim_coord(c_obs.coord('station_wmo_id'), 1)
                 [cl_projection[i].add_aux_coord(aux_c,1) for aux_c in self.obs[0].aux_coords]
 
             cl_projection_final = iris.cube.CubeList()
@@ -196,9 +213,7 @@ class Downscaler(object):
 
             cl_projection_final = cl_projection_final.concatenate()
 
-
-        return cl_projection_final, cl_obs
-
+        return cl_projection_final
 
 
 
@@ -255,7 +270,7 @@ class Downscaler(object):
                 cube_list[i] = c
 
 
-        c_modelcoeff = iris.cube.CubeList()
+        cl_modelcoeff = iris.cube.CubeList()
         cl_projection = iris.cube.CubeList()
 
         for c_obs_ref,c_obs_val in zip(obs_ref,obs_val):
@@ -277,7 +292,7 @@ class Downscaler(object):
                     raise
 
                 # lstsq for every station in loop due to missing values
-                c_modelcoeff.append(iris.cube.Cube(
+                cl_modelcoeff.append(iris.cube.Cube(
                     np.vstack(
                         [ lstsq(pc_all_rea_fields[~c_obs_cl_time.data[:,j].mask,:],
                                c_obs_cl_time.data[~c_obs_cl_time.data[:,j].mask,j].data)[0]
@@ -288,14 +303,14 @@ class Downscaler(object):
                     long_name='ESD Modelcoefficients of ' + self.obs[0].name(),
                     var_name='_'.join(['coeff', self.obs[0].var_name])))
 
-                c_modelcoeff[i].add_dim_coord(iris.coords.DimCoord(
+                cl_modelcoeff[i].add_dim_coord(iris.coords.DimCoord(
                     range(pc_all_rea_fields.shape[-1]),
                     long_name = 'coeff',
                     var_name = 'coeff'),
                 0)
 
-                c_modelcoeff[i].add_dim_coord(c_obs_val.coord('station_wmo_id'), 1)
-                [c_modelcoeff[i].add_aux_coord(aux_c,1) for aux_c in self.obs[0].aux_coords]
+                cl_modelcoeff[i].add_dim_coord(c_obs_val.coord('station_wmo_id'), 1)
+                [cl_modelcoeff[i].add_aux_coord(aux_c,1) for aux_c in self.obs[0].aux_coords]
 
             # Project validation onto reference EOFs and calculate projections
             for i,c_obs_cl_time in enumerate(c_obs_val.cl_time):
@@ -307,7 +322,7 @@ class Downscaler(object):
                     axis=1)
 
                 cl_projection.append(iris.cube.Cube(
-                    np.dot(pc_all_rea_fields,c_modelcoeff[i].data),
+                    np.dot(pc_all_rea_fields,cl_modelcoeff[i].data),
                     long_name='ESD Projection of ' + self.obs[0].name(),
                     var_name='_'.join(['esd','proj', self.obs[0].var_name]),
                     units=c_obs_cl_time.units))
@@ -324,7 +339,7 @@ class Downscaler(object):
             cl_projection_final = cl_projection_final.concatenate()
 
         [c_obs_val.remove_coord('month') for c_obs_val in obs_val]
-        return c_modelcoeff, cl_projection_final, obs_val
+        return cl_modelcoeff, cl_projection_final, obs_val
 
 
     def seasonal_mean(self, *args, **kwargs):
@@ -341,14 +356,6 @@ class Downscaler(object):
 
         self.time_unit = "seasonal"
 
-
-    def eof_analysis(self):
-        from .utils import eof_pc_modes
-
-        # Calculate EOFs
-        for cube_list in [self.rea, self.obs]:
-            for i,c in enumerate(cube_list):
-                c.eof, c.pcs = eof_pc_modes(c, self.explained_variance, show_info=True)
 
     def area_detrended_anomalies(self, c):
         from .utils import calculate_anomaly_monthlymean, eof_pc_modes
