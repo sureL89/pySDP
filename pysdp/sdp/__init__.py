@@ -63,7 +63,7 @@ class Downscaler(object):
             list of days/months (iterable)
         """
         import iris.coord_categorisation
-        from .utils import calculate_anomaly_monthlymean, eof_pc_modes, seasonal_mean
+        from .utils import calculate_anomaly_monthlymean, eof_pc_modes
         from scipy.linalg import lstsq
         import numpy as np
 
@@ -78,6 +78,7 @@ class Downscaler(object):
         # Calculate anomalies and mean, detrend, extract time
         for c in obs_ref:
             c = self.area_detrended_anomalies(c)
+            # TODO einzelne Monate detrenden
             iris.coord_categorisation.add_month(c, 'time', name='month')
 
             # Extract by time
@@ -90,6 +91,7 @@ class Downscaler(object):
 
         # Reduce area, calculate anomalies, detrend, extract time, calculate EOFs
         for c in rea_ref:
+            # TODO einzelne Monate detrenden
             c = self.area_detrended_anomalies(c)
             iris.coord_categorisation.add_month(c, 'time', name='month')
 
@@ -173,6 +175,8 @@ class Downscaler(object):
         cl_scenarios = iris.cube.CubeList()
         cl_picontrol = iris.cube.CubeList()
 
+        # import ipdb; ipdb.set_trace()
+
         for c_pi, c_sce in itertools.izip(picontrol, scenarios):
             c_sce, c_pi.monthly_mean = self.gcm_redarea_anomalies(self.reference_spatial, c_pi, c_sce)
             iris.coord_categorisation.add_month(c_sce, 'time', name='month')
@@ -186,6 +190,7 @@ class Downscaler(object):
             cl_scenarios.append(c_sce)
             cl_picontrol.append(c_pi)
 
+        # import ipdb; ipdb.set_trace()
 
         # Project validation onto reference EOFs and calculate projections
         for c_obs in self.obs:
@@ -225,7 +230,7 @@ class Downscaler(object):
         * reference_period
         * validation_period
         """
-        from .utils import calculate_anomaly_monthlymean, eof_pc_modes, seasonal_mean
+        from .utils import calculate_anomaly_monthlymean, eof_pc_modes
         from scipy.signal import detrend
         from scipy.linalg import lstsq
         import numpy as np
@@ -238,7 +243,7 @@ class Downscaler(object):
             obs_val = self.obs.extract(validation_period)
 
         # Iterate over list of cube lists
-        # Reduce area, detrend, seasonal mean, calculate seasonal EOFs
+        # Reduce area, detrend, calculate EOFs
         for cube_list in [obs_ref, obs_val]:
             for i,c in enumerate(cube_list):
                 c = self.area_detrended_anomalies(c)
@@ -342,20 +347,6 @@ class Downscaler(object):
         return cl_modelcoeff, cl_projection_final, obs_val
 
 
-    def seasonal_mean(self, *args, **kwargs):
-        # Calculate the seasonal mean for all cubes in the cube list
-        import iris.coord_categorisation
-
-        for cube_list in [self.rea, self.obs]:
-            for i,c in enumerate(cube_list):
-                iris.coord_categorisation.add_season(c, 'time', name='clim_season')
-                iris.coord_categorisation.add_season_year(c, 'time', name='season_year')
-                cube_list[i] = c.aggregated_by(
-                    ['clim_season', 'season_year'],
-                    iris.analysis.MEAN)
-
-        self.time_unit = "seasonal"
-
 
     def area_detrended_anomalies(self, c):
         from .utils import calculate_anomaly_monthlymean, eof_pc_modes
@@ -388,6 +379,7 @@ class Downscaler(object):
         from scipy.signal import detrend
         import numpy as np
 
+        # import ipdb; ipdb.set_trace()
         # Extract the reduced area if cube is not a timeseries
         # for c_pi, c_sce in zip(self.picontrol, self.scenarios):
         c_pi = c_pi.intersection(latitude=reference_spatial[0:2],
@@ -397,7 +389,7 @@ class Downscaler(object):
         # Extract data
         c_pi_data = c_pi.data
         c_sce_data = c_sce.data
-        # Calculate seasonal Means
+        # Calculate anomaly and means
         _, c_pi_monthMean = calculate_anomaly_monthlymean(c_pi_data)
         # Calculate monthly Anomalies
         c_sce.data, c_sce_monthMean = calculate_anomaly_monthlymean(c_sce_data, c_pi_monthMean)
